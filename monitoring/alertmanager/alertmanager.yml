@@ -1,0 +1,40 @@
+global:
+  resolve_timeout: 5m
+
+# Hiện chưa gửi cảnh báo ra ngoài: mọi cảnh báo vào receiver 'ui-only' và chỉ xem
+# trên Alertmanager UI (http://localhost:9093) hoặc Grafana.
+# Để bật gửi, thêm cấu hình vào receiver tương ứng (xem mẫu bên dưới), đặt
+# token / URL / mật khẩu vào file trong monitoring/alertmanager/secrets/ (đã gitignore),
+# mount thư mục đó vào container rồi chạy: docker compose restart alertmanager
+route:
+  group_by: ['alertname', 'job', 'severity']
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 1h
+  receiver: 'ui-only'
+  routes:
+    - matchers:
+        - severity = "critical"
+      receiver: 'ui-only'
+
+receivers:
+  - name: 'ui-only'
+
+  # ── Mẫu kênh gửi (bỏ comment khi cần) ──
+  # Telegram:
+  #   telegram_configs:
+  #     - bot_token_file: /etc/alertmanager/secrets/telegram_bot_token
+  #       chat_id: <chat_id>
+  #       parse_mode: HTML
+  # Slack:
+  #   slack_configs:
+  #     - api_url_file: /etc/alertmanager/secrets/slack_webhook_url
+  #       channel: '#banking-alerts'
+  #       send_resolved: true
+  # Email:
+  #   email_configs:
+  #     - to: <email-nhan>
+  #       from: <email-gui>
+  #       smarthost: smtp.gmail.com:587
+  #       auth_username: <email-gui>
+  #       auth_password_file: /etc/alertmanager/secrets/smtp_password

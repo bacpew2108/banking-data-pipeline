@@ -1,0 +1,30 @@
+# Build context của service ingestion là thư mục gốc dự án.
+# Không gửi secret, môi trường ảo, dữ liệu chạy và log vào Docker build context / image.
+.env
+.env.*
+!.env.example
+.venv/
+**/__pycache__/
+**/*.pyc
+**/.DS_Store
+.git/
+.claude/
+
+# Trạng thái và log lúc chạy
+ingestion/checkpoint_state.json
+ingestion/dlq/
+**/*.log
+airflow/logs/
+dbt/target/
+dbt/logs/
+great_expectations/gx/uncommitted/
+monitoring/grafana/grafana.db
+monitoring/grafana/plugins/
+monitoring/grafana/csv/
+monitoring/grafana/pdf/
+monitoring/grafana/png/
+monitoring/grafana/unified-search/
+
+# Tài liệu
+*.docx
+Banking_doc.md

@@ -1,0 +1,137 @@
+groups:
+  - name: banking_pipeline_alerts
+    rules:
+      # 1. Cảnh báo khi có dịch vụ bị DOWN (Kafka, Spark, Postgres, v.v.)
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Dịch vụ {{ $labels.job }} ({{ $labels.instance }}) bị ngắt kết nối"
+          description: "Endpoint {{ $labels.instance }} đã không phản hồi trong hơn 1 phút."
+
+      # 2. Kafka lag của Spark: Spark Structured Streaming không commit offset vào consumer group,
+      #    nên dùng maxOffsetsBehindLatest do listener trong job Bronze đẩy lên Pushgateway.
+      - alert: SparkKafkaLagHigh
+        expr: max by (job, query) (spark_streaming_kafka_offsets_behind_latest) > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Spark đang chậm hơn Kafka (> 1000 offset)"
+          description: "Query {{ $labels.query }} ({{ $labels.job }}) đang trễ {{ $value }} offset so với đầu topic."
+
+      # 3. Spark Streaming bị chết / treo: heartbeat được đẩy mỗi micro-batch và mỗi ~10s khi idle
+      - alert: SparkStreamingStalled
+        expr: time() - max by (job, query) (spark_streaming_last_heartbeat_timestamp_seconds) > 300
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Spark Streaming {{ $labels.query }} không còn hoạt động"
+          description: "Query {{ $labels.query }} ({{ $labels.job }}) đã {{ $value | humanizeDuration }} không gửi heartbeat."
+
+      # 4. Spark cluster không còn worker
+      - alert: SparkNoAliveWorkers
+        expr: metrics_master_aliveWorkers_Value == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Spark Master không còn worker nào"
+          description: "Các job Spark sẽ không được cấp tài nguyên để chạy."
+
+      # 5. Quality Gate (Great Expectations) thất bại
+      - alert: DataQualityGateFailed
+        expr: data_quality_gate_success == 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Quality Gate tầng Silver FAIL"
+          description: "Great Expectations phát hiện vi phạm chất lượng. dbt đã bị chặn, Gold không được cập nhật. Xem Data Docs và log task great_expectations_quality_gate."
+
+      # 6. Tỷ lệ bản ghi bị đẩy vào DLQ cao (Failed Records - mục 3.7)
+      - alert: HighDlqRate
+        expr: |
+          increase(silver_transactions_dlq_total[30m])
+            / clamp_min(increase(silver_transactions_dlq_total[30m]) + increase(silver_transactions_valid_total[30m]), 1)
+            > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Hơn 5% giao dịch bị đẩy vào DLQ trong 30 phút qua"
+          description: "Tỷ lệ bản ghi vào s3a://silver/dlq/transactions_rejected là {{ $value | humanizePercentage }}."
+
+      # 7. Ingestion có bản ghi bị SQL Server từ chối (vi phạm FK...)
+      - alert: IngestionRejectedRecords
+        expr: increase(ingestion_rejected_records_total[30m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Ingestion có bản ghi bị từ chối"
+          description: "{{ $value }} bản ghi bị SQL Server từ chối trong 30 phút qua, xem ingestion/dlq/rejected_transactions.jsonl."
+
+      # 8. DAG Airflow thất bại (Airflow DAG Status - mục 3.7)
+      - alert: AirflowDagFailed
+        expr: airflow_dag_last_run_success == 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DAG {{ $labels.dag_id }} chạy thất bại"
+          description: "Lần chạy gần nhất của DAG {{ $labels.dag_id }} thất bại, kiểm tra log trên Airflow UI."
+
+      # 9. DAG Silver → Gold lâu không chạy (lịch 30 phút/lần)
+      - alert: AirflowPipelineNotRunning
+        expr: time() - airflow_dag_last_run_timestamp_seconds{dag_id="silver_quality_to_gold_pipeline"} > 7200
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DAG silver_quality_to_gold_pipeline hơn 2 giờ chưa chạy xong"
+          description: "Gold có thể đang bị cũ. Kiểm tra scheduler / DAG có bị pause hay treo."
+
+      # 10. Cảnh báo bộ nhớ RAM của container vượt 85% giới hạn.
+      #     Chỉ xét container có đặt giới hạn: container không giới hạn có limit = 0, phép chia ra +Inf.
+      - alert: HighContainerMemoryUsage
+        # Lọc theo id="/docker/<id>": có cả khi Docker dùng containerd snapshotter (cAdvisor không đọc
+        # được tên container, nhãn name trống). container_id = 12 ký tự đầu của ID, tra bằng `docker ps`.
+        expr: |
+          label_replace(
+            (container_memory_usage_bytes{id=~"/docker/[0-9a-f]+"} / (container_spec_memory_limit_bytes{id=~"/docker/[0-9a-f]+"} > 0)) * 100 > 85,
+            "container_id", "$1", "id", "/docker/([0-9a-f]{12}).*")
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} ({{ $labels.container_id }}) sử dụng hơn 85% RAM"
+          description: "Container {{ $labels.name }} ({{ $labels.container_id }}) đang dùng {{ $value | printf \"%.1f\" }}% giới hạn bộ nhớ."
+
+      # 11. Cảnh báo container chiếm hơn 90% tổng CPU của máy
+      #     (so với tổng số nhân: Spark/SQL Server dùng nhiều nhân là bình thường, không phải quá tải)
+      - alert: HighContainerCpuUsage
+        expr: |
+          label_replace(
+            sum by (id, name) (rate(container_cpu_usage_seconds_total{id=~"/docker/[0-9a-f]+"}[1m]))
+              / scalar(max(machine_cpu_cores)) * 100 > 90,
+            "container_id", "$1", "id", "/docker/([0-9a-f]{12}).*")
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} ({{ $labels.container_id }}) chiếm hơn 90% CPU của máy"
+          description: "Container {{ $labels.name }} ({{ $labels.container_id }}) duy trì tải CPU cao liên tục trong 3 phút."
+
+      # 12. Disk của máy chủ Docker sắp đầy (MinIO, Kafka, Postgres, SQL Server đều ghi vào đây)
+      - alert: HostDiskUsageHigh
+        expr: container_fs_usage_bytes{id="/", device=~"/dev/(vd|sd|nvme|xvd|mapper).*"} / container_fs_limit_bytes{id="/", device=~"/dev/(vd|sd|nvme|xvd|mapper).*"} * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk {{ $labels.device }} đã dùng hơn 85%"
+          description: "Disk {{ $labels.device }} đang dùng {{ $value | printf \"%.1f\" }}% dung lượng."

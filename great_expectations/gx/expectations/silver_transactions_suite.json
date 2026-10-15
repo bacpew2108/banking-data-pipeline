@@ -1,0 +1,128 @@
+{
+  "expectations": [
+    {
+      "id": "b8bd9e16-cb1f-4030-a1f1-af3b756041a4",
+      "kwargs": {
+        "column": "id"
+      },
+      "meta": {},
+      "notes": "Completeness: Tr\u01b0\u1eddng id l\u00e0 b\u1eaft bu\u1ed9c v\u00e0 kh\u00f4ng \u0111\u01b0\u1ee3c ph\u00e9p NULL",
+      "severity": "critical",
+      "type": "expect_column_values_to_not_be_null"
+    },
+    {
+      "id": "6c0fe96c-775c-4b2d-b628-969bdab112e1",
+      "kwargs": {
+        "column": "client_id"
+      },
+      "meta": {},
+      "notes": "Completeness: Tr\u01b0\u1eddng client_id l\u00e0 b\u1eaft bu\u1ed9c v\u00e0 kh\u00f4ng \u0111\u01b0\u1ee3c ph\u00e9p NULL",
+      "severity": "critical",
+      "type": "expect_column_values_to_not_be_null"
+    },
+    {
+      "id": "e60f0b4b-603f-4c52-ad83-763eff326205",
+      "kwargs": {
+        "column": "card_id"
+      },
+      "meta": {},
+      "notes": "Completeness: Tr\u01b0\u1eddng card_id l\u00e0 b\u1eaft bu\u1ed9c v\u00e0 kh\u00f4ng \u0111\u01b0\u1ee3c ph\u00e9p NULL",
+      "severity": "critical",
+      "type": "expect_column_values_to_not_be_null"
+    },
+    {
+      "id": "89766010-0bb1-483e-a867-7a288a68a684",
+      "kwargs": {
+        "column": "amount"
+      },
+      "meta": {},
+      "notes": "Completeness: Tr\u01b0\u1eddng amount l\u00e0 b\u1eaft bu\u1ed9c v\u00e0 kh\u00f4ng \u0111\u01b0\u1ee3c ph\u00e9p NULL",
+      "severity": "critical",
+      "type": "expect_column_values_to_not_be_null"
+    },
+    {
+      "id": "5346a49c-75d9-495e-87c4-2300f7a2f2a4",
+      "kwargs": {
+        "column": "tx_timestamp"
+      },
+      "meta": {},
+      "notes": "Completeness: Tr\u01b0\u1eddng tx_timestamp l\u00e0 b\u1eaft bu\u1ed9c v\u00e0 kh\u00f4ng \u0111\u01b0\u1ee3c ph\u00e9p NULL",
+      "severity": "critical",
+      "type": "expect_column_values_to_not_be_null"
+    },
+    {
+      "id": "180cedcb-6031-4c7d-b81a-d03d734d83c4",
+      "kwargs": {
+        "column": "amount",
+        "value_set": [
+          0
+        ]
+      },
+      "meta": {},
+      "notes": "Validity: Gi\u00e1 tr\u1ecb giao d\u1ecbch amount ph\u1ea3i kh\u00e1c 0 (amount < 0 l\u00e0 ho\u00e0n ti\u1ec1n)",
+      "severity": "critical",
+      "type": "expect_column_values_to_not_be_in_set"
+    },
+    {
+      "id": "312bb797-5cd2-429b-997a-6331c9945bb2",
+      "kwargs": {
+        "column": "use_chip",
+        "mostly": 0.95,
+        "value_set": [
+          "Chip Transaction",
+          "Swipe Transaction",
+          "Online Transaction"
+        ]
+      },
+      "meta": {},
+      "notes": "Validity: use_chip ph\u1ea3i thu\u1ed9c t\u1eadp gi\u00e1 tr\u1ecb chu\u1ea9n",
+      "severity": "critical",
+      "type": "expect_column_values_to_be_in_set"
+    },
+    {
+      "id": "aa809034-278f-43fd-9543-a5ed36eb059e",
+      "kwargs": {
+        "column_set": [
+          "id",
+          "client_id",
+          "card_id",
+          "amount",
+          "use_chip",
+          "merchant_id",
+          "merchant_city",
+          "merchant_state",
+          "zip",
+          "mcc",
+          "errors",
+          "is_error",
+          "is_refund",
+          "tx_timestamp",
+          "year",
+          "month",
+          "day"
+        ],
+        "exact_match": false
+      },
+      "meta": {},
+      "notes": "Consistency: B\u1ea3ng ph\u1ea3i c\u00f3 \u0111\u1ea7y \u0111\u1ee7 c\u00e1c c\u1ed9t chu\u1ea9n c\u1ee7a t\u1ea7ng Silver",
+      "severity": "critical",
+      "type": "expect_table_columns_to_match_set"
+    },
+    {
+      "id": "3765c7ea-47db-4bae-b2f4-5f95daf73ca8",
+      "kwargs": {
+        "column": "id"
+      },
+      "meta": {},
+      "notes": "Uniqueness: ID giao d\u1ecbch kh\u00f4ng \u0111\u01b0\u1ee3c tr\u00f9ng l\u1eb7p (100%, kh\u00f4ng cho ph\u00e9p ng\u01b0\u1ee1ng mostly)",
+      "severity": "critical",
+      "type": "expect_column_values_to_be_unique"
+    }
+  ],
+  "id": "eb125df5-a06a-4b41-9cf2-550b29d40597",
+  "meta": {
+    "great_expectations_version": "1.22.0"
+  },
+  "name": "silver_transactions_suite",
+  "notes": null
+}

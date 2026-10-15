@@ -1,0 +1,581 @@
+x-airflow-common:
+  &airflow-common
+  image: apache/airflow:3.3.1
+  environment:
+    - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+    - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@pg-airflow/${AIRFLOW_DB_NAME}
+    - AIRFLOW__CORE__AUTH_MANAGER=airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    - AIRFLOW__CORE__LOAD_EXAMPLES=false
+    - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=false
+    - AIRFLOW__CORE__EXECUTION_API_SERVER_URL=http://airflow-apiserver:8080/execution
+    # Secret lấy từ .env (không ghi cứng trong file được commit)
+    - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY}
+    - AIRFLOW__API__SECRET_KEY=${AIRFLOW_SECRET_KEY}
+    - AIRFLOW__API_AUTH__JWT_SECRET=${AIRFLOW_JWT_SECRET}
+    # DAG đẩy trạng thái lần chạy lên Pushgateway (mục 3.7)
+    - PUSHGATEWAY_URL=${PUSHGATEWAY_URL}
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./airflow/plugins:/opt/airflow/plugins
+    - ./great_expectations:/opt/airflow/great_expectations
+    - ./.env:/opt/airflow/.env:ro
+    - /var/run/docker.sock:/var/run/docker.sock
+  depends_on:
+    - pg-airflow
+
+services:
+  sqlserver:
+    platform: linux/amd64
+    image: mcr.microsoft.com/mssql/server:2022-CU14-ubuntu-22.04
+    container_name: banking_db
+    user: root
+    ports:
+      - "1433:1433"
+    environment:
+      - ACCEPT_EULA=Y
+      - MSSQL_SA_PASSWORD=${MSSQL_SA_PASSWORD}
+      - MSSQL_PID=Developer
+      - MSSQL_AGENT_ENABLED=true
+    volumes:
+      - sqlserver_data:/var/opt/mssql/data
+    restart: always
+
+  sqlserver-init:
+    platform: linux/amd64
+    image: mcr.microsoft.com/mssql/server:2022-CU14-ubuntu-22.04
+    depends_on:
+      - sqlserver
+    volumes:
+      - ./sqlserver/init:/init
+    entrypoint: >
+      /bin/bash -c "
+      echo 'Đang đợi SQL Server sẵn sàng...' &&
+      for i in {1..60}; do
+        /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -P '${MSSQL_SA_PASSWORD}' -C -Q 'SELECT 1' > /dev/null 2>&1 && break || sleep 2;
+      done &&
+      echo 'Tạo database banking_db...' &&
+      /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -P '${MSSQL_SA_PASSWORD}' -C -Q 'IF NOT EXISTS (SELECT name FROM sys.databases WHERE name = \"${DB_NAME}\") CREATE DATABASE ${DB_NAME};' &&
+      echo 'Tạo bảng...' &&
+      /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -P '${MSSQL_SA_PASSWORD}' -C -d ${DB_NAME} -i /init/create_tables.sql &&
+      echo 'Nạp dữ liệu mẫu mcc_codes, users, cards...' &&
+      /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -P '${MSSQL_SA_PASSWORD}' -C -d ${DB_NAME} -i /init/mcc_codes.sql &&
+      /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -P '${MSSQL_SA_PASSWORD}' -C -d ${DB_NAME} -i /init/users.sql &&
+      /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -P '${MSSQL_SA_PASSWORD}' -C -d ${DB_NAME} -i /init/cards.sql &&
+      echo 'Kích hoạt Debezium CDC...' &&
+      /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -P '${MSSQL_SA_PASSWORD}' -C -d ${DB_NAME} -i /init/enable_cdc.sql &&
+      echo 'SQL Server init hoàn tất!'
+      "
+
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka-banking  
+    ports:
+      - "9092:9092"
+    environment:
+      - KAFKA_NODE_ID=1
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:29093
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      - KAFKA_LISTENERS=PLAINTEXT://kafka:29092,CONTROLLER://kafka:29093,PLAINTEXT_HOST://0.0.0.0:9092
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=0
+      - CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk
+    healthcheck:
+      test: [ "CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    restart: always
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1
+    container_name: minio-banking
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      # Khóa KMS cho mã hóa at-rest SSE-S3 (mục 3.1.2)
+      - MINIO_KMS_SECRET_KEY=${MINIO_KMS_SECRET_KEY}
+    volumes:
+      - minio_data:/data
+    restart: always
+
+  # Tạo bucket bronze/silver và bật SSE-S3 mặc định (trước đây phải tạo bucket bằng tay)
+  minio-init:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1
+    container_name: minio_init
+    depends_on:
+      - minio
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ./minio/init:/init:ro
+    entrypoint: ["/bin/sh", "/init/create_buckets.sh"]
+
+  # Volume spark-ivy mới tạo thuộc root, trong khi image Spark chạy bằng user spark (uid 185):
+  # cấp quyền một lần để spark-submit ghi được cache package Maven (--packages)
+  spark-ivy-init:
+    image: apache/spark:4.1.3
+    user: root
+    entrypoint: ["sh", "-c", "chown -R 185:185 /tmp/.ivy && echo 'spark-ivy: đã cấp quyền cho user spark'"]
+    volumes:
+      - spark-ivy:/tmp/.ivy
+
+  spark-master:
+    image: apache/spark:4.1.3
+    container_name: spark-master
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    depends_on:
+      spark-ivy-init:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      - SPARK_MODE=master
+      # Xuất metrics dạng Prometheus tại /metrics/master/prometheus/ (Prometheus job 'spark')
+      - SPARK_MASTER_OPTS=-Dspark.metrics.conf.*.sink.prometheusServlet.class=org.apache.spark.metrics.sink.PrometheusServlet -Dspark.metrics.conf.*.sink.prometheusServlet.path=/metrics/prometheus -Dspark.metrics.conf.master.sink.prometheusServlet.path=/metrics/master/prometheus -Dspark.metrics.conf.applications.sink.prometheusServlet.path=/metrics/applications/prometheus
+    ports:
+      - "8081:8080" 
+      - "7077:7077"
+    volumes:
+      - ./spark:/opt/spark/apps
+      - spark-data:/opt/spark/work-dir
+      - spark-ivy:/tmp/.ivy
+      - ./.env:/opt/spark/.env:ro
+
+  spark-worker:
+    image: apache/spark:4.1.3
+    depends_on:
+      spark-master:
+        condition: service_started
+      spark-ivy-init:
+        condition: service_completed_successfully
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    env_file:
+      - .env
+    volumes:
+      - ./spark:/opt/spark/apps
+      - spark-data:/opt/spark/work-dir 
+      - spark-ivy:/tmp/.ivy
+      - ./.env:/opt/spark/.env:ro
+
+  spark-bronze-streaming:
+    image: apache/spark:4.1.3
+    container_name: spark_bronze_streaming
+    restart: always
+    depends_on:
+      spark-master:
+        condition: service_started
+      spark-worker:
+        condition: service_started
+      debezium-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      spark-ivy-init:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./spark:/opt/spark/apps
+      - spark-ivy:/tmp/.ivy
+      - ./.env:/opt/spark/.env:ro
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo 'Đợi Spark Master và Worker sẵn sàng...'
+        sleep 15
+        /opt/spark/bin/spark-submit \
+          --master spark://spark-master:7077 \
+          --conf spark.jars.ivy=/tmp/.ivy \
+          --conf spark.cores.max=2 \
+          --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.3,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 \
+          --conf spark.sql.streaming.forceDeleteTempCheckpointLocation=true \
+          /opt/spark/apps/jobs/bronze/stream_bronze_ingestion.py
+
+  spark-silver-streaming:
+    image: apache/spark:4.1.3
+    container_name: spark_silver_streaming
+    restart: always
+    depends_on:
+      spark-master:
+        condition: service_started
+      spark-worker:
+        condition: service_started
+      spark-bronze-streaming:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+      spark-ivy-init:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./spark:/opt/spark/apps
+      - spark-ivy:/tmp/.ivy
+      - ./.env:/opt/spark/.env:ro
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo 'Đợi Bronze Streaming và Spark Cluster sẵn sàng...'
+        sleep 30
+        /opt/spark/bin/spark-submit \
+          --master spark://spark-master:7077 \
+          --conf spark.jars.ivy=/tmp/.ivy \
+          --conf spark.cores.max=2 \
+          --packages org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 \
+          --conf spark.sql.streaming.forceDeleteTempCheckpointLocation=true \
+          /opt/spark/apps/jobs/silver/stream_silver_transformation.py --mode streaming
+
+  great-expectations:
+    build:
+      context: ./great_expectations
+    image: great_expectations:latest
+    container_name: great_expectations
+    volumes:
+      - ./great_expectations:/app/great_expectations
+      - ./.env:/app/.env:ro
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    command: ["--endpoint", "minio:9000", "--allow-empty"]
+
+
+  debezium-connect:
+    image: quay.io/debezium/connect:2.6.2.Final
+    container_name: debezium_connect
+    ports:
+      - "8083:8083"
+    environment:
+      - BOOTSTRAP_SERVERS=kafka:29092
+      - GROUP_ID=1
+      - CONFIG_STORAGE_TOPIC=debezium_connect_configs
+      - OFFSET_STORAGE_TOPIC=debezium_connect_offsets
+      - STATUS_STORAGE_TOPIC=debezium_connect_statuses
+      - CONFIG_STORAGE_REPLICATION_FACTOR=1
+      - OFFSET_STORAGE_REPLICATION_FACTOR=1
+      - STATUS_STORAGE_REPLICATION_FACTOR=1
+      - KEY_CONVERTER=org.apache.kafka.connect.json.JsonConverter
+      - VALUE_CONVERTER=org.apache.kafka.connect.json.JsonConverter
+      # Job Bronze đọc envelope {"schema":..., "payload":{"after":...}} nên cần schemas.enable=true.
+      # Image Debezium chỉ chuyển biến có tiền tố CONNECT_ thành cấu hình worker
+      # (KEY_/VALUE_CONVERTER_SCHEMAS_ENABLE không tiền tố trước đây bị bỏ qua).
+      - CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE=true
+      - CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE=true
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  debezium-init:
+    image: curlimages/curl:8.7.1
+    container_name: debezium_init
+    depends_on:
+      debezium-connect:
+        condition: service_started
+      # Chỉ đăng ký connector sau khi CDC đã được bật xong trên SQL Server
+      sqlserver-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./debezium/connectors:/connectors
+    environment:
+      - MSSQL_SA_PASSWORD=${MSSQL_SA_PASSWORD}
+    # PUT /connectors/<name>/config: tạo mới nếu chưa có, cập nhật nếu đã có,
+    # nên mọi thay đổi trong sqlserver-connector.json đều được áp dụng mỗi lần khởi động.
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Đang đợi Debezium Connect REST API sẵn sàng...' &&
+      while [ \$$(curl -s -o /dev/null -w '%{http_code}' http://debezium-connect:8083/connectors) -ne 200 ]; do
+        sleep 3;
+      done &&
+      echo 'Debezium Connect đã sẵn sàng. Đang đăng ký/cập nhật banking-sqlserver-connector từ file JSON...' &&
+      sed \"s/\\\$$\{MSSQL_SA_PASSWORD\}/\$MSSQL_SA_PASSWORD/g\" /connectors/sqlserver-connector.json |
+      curl -sS --fail-with-body -o /tmp/connect_response.json -X PUT -H 'Content-Type: application/json' http://debezium-connect:8083/connectors/banking-sqlserver-connector/config -d @- ||
+      { echo 'Đăng ký connector thất bại:'; cat /tmp/connect_response.json; exit 1; } &&
+      echo 'Đã áp dụng cấu hình connector!'
+      "
+
+  data_warehouse:
+    image: postgres:16-alpine
+    container_name: data_warehouse
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      # Role chỉ-đọc (chỉ SELECT schema gold) cho Superset, tạo bởi postgres/init/
+      - SUPERSET_DWH_USER=${SUPERSET_DWH_USER}
+      - SUPERSET_DWH_PASSWORD=${SUPERSET_DWH_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+
+  dbt:
+    build:
+      context: ./dbt
+    container_name: dbt
+    entrypoint: ["tail", "-f", "/dev/null"]
+    env_file:
+      - .env
+    environment:
+      - DBT_PROFILES_DIR=/usr/app/dbt
+    volumes:
+      - ./dbt:/usr/app/dbt
+    depends_on:
+      - data_warehouse
+
+  pg-airflow:
+    image: postgres:13
+    environment:
+      - POSTGRES_USER=${AIRFLOW_DB_USER}
+      - POSTGRES_PASSWORD=${AIRFLOW_DB_PASSWORD}
+      - POSTGRES_DB=${AIRFLOW_DB_NAME}
+    volumes:
+      - airflow-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${AIRFLOW_DB_USER} -d ${AIRFLOW_DB_NAME}"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pg-superset:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: ${SUPERSET_DB_USER}
+      POSTGRES_PASSWORD: ${SUPERSET_DB_PASSWORD}
+      POSTGRES_DB: ${SUPERSET_DB_NAME}
+    volumes:
+      - superset-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${SUPERSET_DB_USER} -d ${SUPERSET_DB_NAME}"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  airflow-init:
+    <<: *airflow-common
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@pg-airflow/${AIRFLOW_DB_NAME}
+      - AIRFLOW__CORE__AUTH_MANAGER=airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      - _AIRFLOW_WWW_USER_USERNAME=${AIRFLOW_ADMIN_USER}
+      - _AIRFLOW_WWW_USER_PASSWORD=${AIRFLOW_ADMIN_PASSWORD}
+    command: >
+      bash -c "airflow db migrate && 
+      airflow users create --username $${_AIRFLOW_WWW_USER_USERNAME} --password $${_AIRFLOW_WWW_USER_PASSWORD} --firstname Admin --lastname User --role Admin --email admin@example.com"
+  
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server --host 0.0.0.0 --port 8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      pg-airflow:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      pg-airflow:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+  
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    depends_on:
+      pg-airflow:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    depends_on:
+      pg-airflow:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  superset-init:
+    build:
+      context: ./superset
+      dockerfile: Dockerfile
+    image: banking-superset:6.0.0
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+      SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://${SUPERSET_DB_USER}:${SUPERSET_DB_PASSWORD}@pg-superset:5432/${SUPERSET_DB_NAME}
+      # Superset chỉ dùng role chỉ-đọc trên schema gold, không dùng tài khoản owner của DWH
+      SUPERSET_DWH_USER: ${SUPERSET_DWH_USER}
+      SUPERSET_DWH_PASSWORD: ${SUPERSET_DWH_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      PG_DWH_HOST: data_warehouse
+      PG_DWH_PORT: 5432
+    volumes:
+      - ./superset:/app/superset_app
+    depends_on:
+      pg-superset:
+        condition: service_healthy
+      data_warehouse:
+        condition: service_started
+    entrypoint: >
+      /bin/sh -c "
+      superset db upgrade &&
+      superset fab create-admin
+      --username admin
+      --firstname Admin
+      --lastname Admin
+      --email admin@admin.com
+      --password ${SUPERSET_ADMIN_PASSWORD} &&
+      superset init &&
+      python /app/superset_app/init_superset_assets.py
+      "
+
+  superset:
+    build:
+      context: ./superset
+      dockerfile: Dockerfile
+    image: banking-superset:6.0.0
+    environment:
+      - SUPERSET_SECRET_KEY=${SUPERSET_SECRET_KEY}
+      - SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://${SUPERSET_DB_USER}:${SUPERSET_DB_PASSWORD}@pg-superset:5432/${SUPERSET_DB_NAME}
+    ports:
+      - "8088:8088"
+    depends_on:
+      pg-superset:
+        condition: service_started
+      superset-init:
+        condition: service_completed_successfully
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: alertmanager
+    volumes:
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.7.0
+    container_name: kafka-exporter
+    restart: unless-stopped
+    command: ["--kafka.server=kafka:29092"]
+    ports:
+      - "9308:9308"
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: prometheus
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - alertmanager
+      - pushgateway
+      - cadvisor
+
+  # Nhận metrics do các job đẩy lên: Spark streaming (throughput, Kafka lag, heartbeat, DLQ),
+  # Great Expectations (Quality Gate), Airflow DAG status, ingestion
+  pushgateway:
+    image: prom/pushgateway:v1.9.0
+    container_name: pushgateway
+    restart: unless-stopped
+    ports:
+      - "9091:9091"
+
+  # CPU / RAM / Disk của các container (Prometheus job 'cadvisor')
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.52.1
+    container_name: cadvisor
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      # Lưu ý: Docker Desktop đời mới dùng containerd image store, cAdvisor không đọc được tên
+      # container (nhãn name trống) nhưng vẫn đo CPU/RAM/Disk từng container theo nhãn id.
+      # Dashboard và alert đã dùng nhãn id nên chạy được ở cả hai chế độ.
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+
+  grafana:
+    image: grafana/grafana:13.0
+    container_name: grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+  ingestion:
+    build:
+      context: .
+      dockerfile: ingestion/Dockerfile
+    container_name: ingestion_service
+    depends_on:
+      # Chờ database/bảng được tạo xong (trước đây chỉ chờ container SQL Server khởi động
+      # nên hay gặp lỗi "Cannot open database banking_db" lúc mới bật)
+      sqlserver-init:
+        condition: service_completed_successfully
+    environment:
+      - DB_SERVER=sqlserver
+      - PUSHGATEWAY_URL=${PUSHGATEWAY_URL}
+    volumes:
+      - ./ingestion:/app/ingestion
+      - ./.env:/app/.env:ro
+
+
+volumes:
+  sqlserver_data:
+  kafka_data:
+  minio_data:
+  spark-data:
+  spark-ivy:
+  postgres_data:
+  airflow-db-volume:
+  superset-db-volume:
+  grafana-data:

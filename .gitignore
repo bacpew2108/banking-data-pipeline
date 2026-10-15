@@ -216,3 +216,27 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ── Riêng cho banking-data-pipeline ──
+# Secret: chỉ commit .env.example
+.env.*
+!.env.example
+monitoring/alertmanager/secrets/
+
+# macOS
+.DS_Store
+
+# Trạng thái / dữ liệu lúc chạy
+ingestion/checkpoint_state.json*
+ingestion/dlq/
+airflow/logs/
+dbt/logs/
+great_expectations/gx/uncommitted/
+
+# Dữ liệu Grafana cũ (Grafana hiện lưu trong volume grafana-data)
+monitoring/grafana/grafana.db
+monitoring/grafana/plugins/
+monitoring/grafana/csv/
+monitoring/grafana/pdf/
+monitoring/grafana/png/
+monitoring/grafana/unified-search/

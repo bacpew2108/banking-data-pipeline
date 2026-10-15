@@ -1,0 +1,128 @@
+version: 2
+
+models:
+  # ── Dimension Tables ──
+  - name: dim_date
+    description: "Bảng chiều Ngày (Calendar Dimension) tự sinh từ 2019 đến 2030"
+    columns:
+      - name: date_key
+        description: "Surrogate Key dạng int (yyyymmdd)"
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_customer
+    description: "Bảng chiều Khách hàng từ users_clean"
+    columns:
+      - name: customer_key
+        description: "Surrogate Key"
+        tests:
+          - unique
+          - not_null
+      - name: client_id
+        description: "ID khách hàng gốc"
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_card
+    description: "Bảng chiều Thẻ từ cards_clean (PII đã mask)"
+    columns:
+      - name: card_key
+        description: "Surrogate Key"
+        tests:
+          - unique
+          - not_null
+      - name: card_id
+        description: "ID thẻ gốc"
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_mcc
+    description: "Bảng chiều Merchant Category Code"
+    columns:
+      - name: mcc_key
+        description: "Surrogate Key"
+        tests:
+          - unique
+          - not_null
+      - name: mcc_id
+        description: "Mã MCC gốc"
+        tests:
+          - unique
+          - not_null
+
+  # ── Fact Table ──
+  - name: fact_transaction
+    description: "Bảng Fact giao dịch (Star Schema) join 4 Dimensions"
+    columns:
+      - name: transaction_key
+        description: "Surrogate Key"
+        tests:
+          - unique
+          - not_null
+      - name: transaction_id
+        description: "ID giao dịch gốc (Degenerate Dimension)"
+        tests:
+          - unique
+          - not_null
+      - name: customer_key
+        description: "FK → dim_customer"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_customer')
+              field: customer_key
+              config:
+                where: "customer_key != -1"
+      - name: card_key
+        description: "FK → dim_card"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_card')
+              field: card_key
+              config:
+                where: "card_key != -1"
+      - name: mcc_key
+        description: "FK → dim_mcc"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_mcc')
+              field: mcc_key
+              config:
+                where: "mcc_key != -1"
+      - name: date_key
+        description: "FK → dim_date"
+        tests:
+          - not_null
+      - name: amount
+        description: "Giá trị giao dịch (âm = hoàn tiền)"
+        tests:
+          - not_null
+      - name: is_refund
+        description: "Giao dịch hoàn tiền (amount < 0)"
+        tests:
+          - not_null
+
+  # ── Data Marts ──
+  - name: mart_daily_transaction
+    description: "Tổng hợp giao dịch theo ngày. total_amount/avg_amount chỉ tính giao dịch mua; refund_amount là tổng tiền hoàn (số dương); net_amount = mua - hoàn"
+    columns:
+      - name: date_key
+        tests:
+          - unique
+          - not_null
+
+  - name: mart_customer
+    description: "Hành vi chi tiêu theo khách hàng. total_spending chỉ tính giao dịch mua; total_refund là tổng tiền hoàn; net_spending = mua - hoàn"
+    columns:
+      - name: customer_key
+        tests:
+          - unique
+          - not_null
+
+  - name: mart_card
+    description: "Phân tích theo loại thẻ, thương hiệu. total_amount/avg_amount chỉ tính giao dịch mua; refund_amount là tổng tiền hoàn; net_amount = mua - hoàn"

@@ -1,0 +1,17 @@
+{
+    "connector.class": "io.debezium.connector.sqlserver.SqlServerConnector",
+    "database.hostname": "sqlserver",
+    "database.port": "1433",
+    "database.user": "sa",
+    "database.password": "${MSSQL_SA_PASSWORD}",
+    "database.names": "banking_db",
+    "topic.prefix": "banking",
+    "table.include.list": "dbo.cards,dbo.mcc_codes,dbo.users,dbo.transactions",
+    "snapshot.mode": "initial",
+    "schema.history.internal.kafka.bootstrap.servers": "kafka:29092",
+    "schema.history.internal.kafka.topic": "schemahistory.banking",
+    "include.schema.changes": "false",
+    "decimal.handling.mode": "double",
+    "database.encrypt": "false",
+    "column.exclude.list": "(.*\\.)?dbo\\.cards\\.cvv"
+}

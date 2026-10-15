@@ -1,0 +1,76 @@
+version: 2
+
+sources:
+  - name: staging
+    schema: staging
+    description: "Dữ liệu Silver được nạp từ MinIO Parquet vào PostgreSQL staging schema"
+    tables:
+      - name: stg_transactions
+        description: "Giao dịch thẻ đã qua làm sạch, lọc DLQ"
+        columns:
+          - name: id
+            description: "ID giao dịch gốc"
+          - name: client_id
+            description: "ID khách hàng"
+          - name: card_id
+            description: "ID thẻ"
+          - name: amount
+            description: "Giá trị giao dịch (đã validated khác 0; âm = hoàn tiền)"
+          - name: is_refund
+            description: "Giao dịch hoàn tiền (amount < 0)"
+          - name: mcc
+            description: "Mã MCC (Merchant Category Code)"
+          - name: tx_timestamp
+            description: "Thời điểm giao dịch"
+          - name: is_error
+            description: "Giao dịch có lỗi (True/False)"
+          - name: use_chip
+            description: "Phương thức: Chip/Swipe/Online"
+          - name: merchant_city
+            description: "Thành phố merchant"
+          - name: merchant_state
+            description: "Bang/tỉnh merchant"
+
+      - name: stg_users
+        description: "Thông tin khách hàng đã khử trùng"
+        columns:
+          - name: id
+            description: "ID khách hàng gốc"
+          - name: current_age
+            description: "Tuổi hiện tại"
+          - name: gender
+            description: "Giới tính"
+          - name: yearly_income
+            description: "Thu nhập hàng năm"
+          - name: credit_score
+            description: "Điểm tín dụng"
+          - name: address
+            description: "Địa chỉ"
+          - name: _cdc_timestamp
+            description: "Thời điểm thay đổi CDC (epoch ms) - dùng để lấy phiên bản mới nhất"
+
+      - name: stg_cards
+        description: "Thông tin thẻ đã mask PII (card_number SHA-256, CVV nullified)"
+        columns:
+          - name: id
+            description: "ID thẻ gốc"
+          - name: client_id
+            description: "ID khách hàng sở hữu thẻ"
+          - name: card_brand
+            description: "Thương hiệu thẻ (Visa/Mastercard/...)"
+          - name: card_type
+            description: "Loại thẻ (Credit/Debit/Prepaid)"
+          - name: has_chip
+            description: "Có gắn chip EMV"
+          - name: credit_limit
+            description: "Hạn mức tín dụng"
+          - name: _cdc_timestamp
+            description: "Thời điểm thay đổi CDC (epoch ms) - dùng để lấy phiên bản mới nhất"
+
+      - name: stg_mcc
+        description: "Danh mục Merchant Category Code (bảng tĩnh)"
+        columns:
+          - name: mcc_id
+            description: "Mã MCC gốc"
+          - name: description
+            description: "Tên ngành nghề kinh doanh"

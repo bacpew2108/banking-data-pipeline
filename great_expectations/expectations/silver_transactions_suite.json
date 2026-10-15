@@ -1,0 +1,128 @@
+{
+  "name": "silver_transactions_suite",
+  "id": "eb125df5-a06a-4b41-9cf2-550b29d40597",
+  "expectations": [
+    {
+      "type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "id"
+      },
+      "meta": {},
+      "notes": "Completeness: Trường id là bắt buộc và không được phép NULL",
+      "id": "b8bd9e16-cb1f-4030-a1f1-af3b756041a4",
+      "severity": "critical"
+    },
+    {
+      "type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "client_id"
+      },
+      "meta": {},
+      "notes": "Completeness: Trường client_id là bắt buộc và không được phép NULL",
+      "id": "6c0fe96c-775c-4b2d-b628-969bdab112e1",
+      "severity": "critical"
+    },
+    {
+      "type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "card_id"
+      },
+      "meta": {},
+      "notes": "Completeness: Trường card_id là bắt buộc và không được phép NULL",
+      "id": "e60f0b4b-603f-4c52-ad83-763eff326205",
+      "severity": "critical"
+    },
+    {
+      "type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "amount"
+      },
+      "meta": {},
+      "notes": "Completeness: Trường amount là bắt buộc và không được phép NULL",
+      "id": "89766010-0bb1-483e-a867-7a288a68a684",
+      "severity": "critical"
+    },
+    {
+      "type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "tx_timestamp"
+      },
+      "meta": {},
+      "notes": "Completeness: Trường tx_timestamp là bắt buộc và không được phép NULL",
+      "id": "5346a49c-75d9-495e-87c4-2300f7a2f2a4",
+      "severity": "critical"
+    },
+    {
+      "type": "expect_column_values_to_not_be_in_set",
+      "kwargs": {
+        "column": "amount",
+        "value_set": [
+          0
+        ]
+      },
+      "meta": {},
+      "notes": "Validity: Giá trị giao dịch amount phải khác 0 (amount < 0 là hoàn tiền)",
+      "id": "180cedcb-6031-4c7d-b81a-d03d734d83c4",
+      "severity": "critical"
+    },
+    {
+      "type": "expect_column_values_to_be_in_set",
+      "kwargs": {
+        "column": "use_chip",
+        "mostly": 0.95,
+        "value_set": [
+          "Chip Transaction",
+          "Swipe Transaction",
+          "Online Transaction"
+        ]
+      },
+      "meta": {},
+      "notes": "Validity: use_chip phải thuộc tập giá trị chuẩn",
+      "id": "312bb797-5cd2-429b-997a-6331c9945bb2",
+      "severity": "critical"
+    },
+    {
+      "type": "expect_table_columns_to_match_set",
+      "kwargs": {
+        "column_set": [
+          "id",
+          "client_id",
+          "card_id",
+          "amount",
+          "use_chip",
+          "merchant_id",
+          "merchant_city",
+          "merchant_state",
+          "zip",
+          "mcc",
+          "errors",
+          "is_error",
+          "is_refund",
+          "tx_timestamp",
+          "year",
+          "month",
+          "day"
+        ],
+        "exact_match": false
+      },
+      "meta": {},
+      "notes": "Consistency: Bảng phải có đầy đủ các cột chuẩn của tầng Silver",
+      "id": "aa809034-278f-43fd-9543-a5ed36eb059e",
+      "severity": "critical"
+    },
+    {
+      "type": "expect_column_values_to_be_unique",
+      "kwargs": {
+        "column": "id"
+      },
+      "meta": {},
+      "notes": "Uniqueness: ID giao dịch không được trùng lặp (100%, không cho phép ngưỡng mostly)",
+      "id": "3765c7ea-47db-4bae-b2f4-5f95daf73ca8",
+      "severity": "critical"
+    }
+  ],
+  "meta": {
+    "great_expectations_version": "1.22.0"
+  },
+  "notes": null
+}
